@@ -1,0 +1,46 @@
+                                CelineEngine
+                          Licence and third-party notices
+
+Copyright (C) 2026 Céline Audio
+
+CelineEngine is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3, as published by the
+Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+The full licence text is in the file COPYING beside this one.
+
+Source: https://github.com/Celine-audio/CelineEngine
+
+
+================================================================================
+WHY AGPL
+================================================================================
+
+CelineEngine is compiled into Céline and Céline Player, which are built on JUCE
+under its free licence and so are AGPLv3. The circuit simulator they share is
+under the same terms.
+
+This repository is public for the same reason the plugins are: anyone given a
+binary is entitled to the corresponding source for that exact build. Each plugin
+pins the CelineEngine commit it was built against, and each release is built from a
+tagged commit of the plugin, so the source of a release is always reachable.
+
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+The code here is built against JUCE (AGPLv3, (C) Raw Material Software Limited)
+but does not bundle it.
+
+The device equations follow SPICE (Berkeley, BSD-licensed) and the published
+valve models of Norman Koren and of Dempwolf and Zölzer (DAFx-11); the
+parameters are fitted here to manufacturers' datasheets, which each model's
+header comment names. Equations and fitted numbers are facts, not copied code.
