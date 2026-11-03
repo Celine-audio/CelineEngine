@@ -1,6 +1,6 @@
 # CelineEngine
 
-The circuit simulator shared by Céline and Céline Player.
+The circuit simulator behind Céline.
 
 Modified nodal analysis with SPICE-grade device models — diodes, BJTs, JFETs,
 MOSFETs, op-amps, triodes, pentodes, rectifiers, transformers — solved per sample
@@ -50,4 +50,4 @@ the drawn sheets that exercise the engine end to end.
 
 ## Licence
 
-AGPLv3, like the plugins that compile it. See `LICENSE` and `COPYING`.
+AGPLv3, like Céline, which compiles it. See `LICENSE` and `COPYING`.

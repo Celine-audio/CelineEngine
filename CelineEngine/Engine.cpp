@@ -960,9 +960,8 @@ void Circuit::clearState() noexcept
 
     std::fill(nodeVoltage.begin(), nodeVoltage.end(), 0.0);
     std::fill(portVoltage.begin(), portVoltage.end(), 0.0);
-    std::fill(portVoltagePrevious.begin(), portVoltagePrevious.end(), 0.0);
     lastIterationCount = 0;
-    lastSampleConverged = true;
+    lastActiveRowCount = 0;
 }
 
 void Circuit::reset()

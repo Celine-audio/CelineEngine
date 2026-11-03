@@ -23,9 +23,9 @@ Source: https://github.com/Celine-audio/CelineEngine
 WHY AGPL
 ================================================================================
 
-CelineEngine is compiled into Céline and Céline Player, which are built on JUCE
-under its free licence and so are AGPLv3. The circuit simulator they share is
-under the same terms.
+CelineEngine is compiled into Céline, which is built on JUCE under its free
+licence and so is AGPLv3. The circuit simulator it runs on is under the same
+terms.
 
 This repository is public for the same reason the plugins are: anyone given a
 binary is entitled to the corresponding source for that exact build. Each plugin

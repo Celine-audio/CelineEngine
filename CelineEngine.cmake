@@ -1,4 +1,4 @@
-# CelineEngine -- the circuit simulator shared by Céline and Céline Player.
+# CelineEngine -- the circuit simulator behind Céline.
 #
 # A plugin brings it in with three lines, after its SharedCode target exists:
 #

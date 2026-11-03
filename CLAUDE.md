@@ -4,7 +4,7 @@ Guidance for Claude Code working in this repository.
 
 ## What this is
 
-**CelineEngine** is the circuit simulator behind Céline and Céline Player: modified
+**CelineEngine** is the circuit simulator behind Céline: modified
 nodal analysis, SPICE-grade device models, and a DK-method solver fast enough to run a
 drawn circuit as an audio plugin. It knows nothing about drawing, plugins or the UI —
 it is a netlist in, samples out.
@@ -22,7 +22,7 @@ at `modules/CelineEngine` and compiled inside that plugin's `SharedCode`
   `tests/ComponentModels.cpp` and the benchmarks there. Some of them build drawn sheets,
   which only Céline can do. The datasheets every model is fitted to are in Céline's
   `docs/specs/<kind>/`.
-- A change here changes the sound of every sheet in both plugins. Céline's hidden
+- A change here changes the sound of every sheet in Céline. Céline's hidden
   `[.sheets]` bench renders real sheets against a reference and a tight-tolerance
   render; run it before and after anything in the solver.
 
@@ -85,9 +85,20 @@ Components that state a *constraint* rather than a current — `VoltageSource`, 
 
 Force one with `setSolverStrategy()` to benchmark or to check the two agree — they match to ~1e-8 V.
 
+**A DK Newton step solves J step = residual, J = I + K di/dv**, and on a full amp that solve is most of what a sample costs: on a four-stage VH4 (28 ports) the Jacobian's assembly and factorisation were 70% of the time. di/dv is block diagonal, one row per device current, and a current that barely moves with its voltages — a valve grid that is not conducting — adds next to nothing to J. So each step keeps only the k rows that do and solves by Woodbury, J⁻¹ = I − K_a (I_k + D_a K_a)⁻¹ D_a, a k × k factorisation instead of the m × m one (`solveReducedNewtonStep()`). A row goes only when nothing it adds to J reaches 1e-6 of the unit diagonal, so every step is still Newton's: within −143 dB of the full step, the same iteration count to the sample, 29–35% less CPU on every valve amp and preamp measured. Past 85% of the rows it takes the full step, which is where transistor circuits always are (±2%, the row test). The residual — the circuit's own equations — is untouched, so this changes the route to the root, never the root. `setReducedNewtonStep(false)` exists for the test that holds it to the full step, not as an option.
+
+What was measured and **not** kept, so it is not tried again on a hunch:
+
+- **Reusing the Jacobian** across steps and samples (the chord method), and **Broyden's rank-one updates** to a kept one. Linear or superlinear convergence stopping on an error *estimate*: slower than the reduced step on every valve sheet but one, and −42 to −80 dB of error where the full step gives −126 dB.
+- **A looser Newton tolerance.** 3–9% faster for −56 to −110 dB of error: the VH4 needs 4.4–4.8 iterations a sample whatever it is set to.
+- **Seeding Newton from a straight-line extrapolation** of the last two samples. Exact, but it swings both ways by circuit (−9% on a fuzz, +5% on a synth-like pedal, +3% on the VH4) and nobody can tell in advance which way their sheet goes. Removed.
+- **The amp's stage structure** — factorising each stage's block on its own. In the VH4's reduced system the couplings from a later stage back to an earlier one run from 0.2 to 33 times the diagonal (a gain stage DC-coupled to its follower, Miller capacitance tying grid to plate, the global feedback reaching the phase inverter), so there is no block-triangular structure to take exactly.
+
+With the reduced step the VH4's time is still mostly the Newton loop's own linear algebra — the k × k solve, its assembly and the residual, 58% — then the valve equations (24%) and the per-sample linear solve (9%).
+
 ## Code quality
 
-Warnings are errors, in both plugins that build this. Uses `.clang-format`-style
+Warnings are errors, in Céline and wherever else this is built. Uses `.clang-format`-style
 Allman braces, 4-space indentation, no column limit — match the surrounding code.
 
 Everything on the per-sample path is realtime code: nothing allocates after

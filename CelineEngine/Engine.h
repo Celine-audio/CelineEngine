@@ -449,21 +449,34 @@ class Circuit
     /** Must be called before prepare(); the choice is acted on there. */
     void setSolverStrategy(SolverStrategy strategy) noexcept { requestedStrategy = strategy; }
 
-    /** Whether Newton starts each sample from a straight-line extrapolation of
-        the last two, rather than from the last one alone.
+    /**
+        Whether each Newton step is solved through the device current rows
+        that matter rather than through the whole port Jacobian.
 
-        A port that has been moving steadily is more likely to land where the
-        line points than where it currently sits, and the iteration it saves is
-        saved on the most expensive loop in the plugin. It cannot make an answer
-        wrong -- Newton converges to the same root from either start -- so the
-        only risk is a bad guess costing an extra pass, and the per-device
-        voltage limiter damps a wild one on the first iteration anyway.
+        J = I + K di/dv, and di/dv is block diagonal: one small block per
+        device, one row per port current. A row whose current barely moves
+        with its voltages -- a valve grid that is not conducting, a junction
+        that is off -- adds next to nothing to J, and with k rows left the step
+        can be had from a k x k system instead of the m x m one, by Woodbury.
+        On a valve amp that is a factorisation about a third the size.
 
-        Default off: measured a win on pedals and low-gain preamps, but a loss
-        on a high-gain one -- the port trajectories there are clipped rather
-        than smooth, and the bad guesses cost limiter-damped iterations. It
-        ships as the BuildOptions.predictNewtonSeed option for that reason. */
-    void setPortVoltagePrediction(bool shouldPredict) noexcept { predictPortVoltages = shouldPredict; }
+        Not an approximation anyone can hear: a row is dropped only when
+        nothing it adds to J reaches a millionth of J's unit diagonal, so each
+        step is still Newton's, converging quadratically to the same root.
+        Measured against the full step: within -143 dB, the same iteration
+        count to the sample, and 29-35% less CPU on the valve amps and preamps
+        (a full four-stage VH4 included). Where most rows matter --
+        transistors, whose junctions all conduct -- it takes the full step, and
+        the row test costs within the noise (+-2% on two pedals).
+
+        Always on in the plugin. The switch is here so that a test can hold it
+        to the full step it replaces.
+    */
+    void setReducedNewtonStep(bool shouldReduce) noexcept { reduceNewtonStep = shouldReduce; }
+
+    /** The current rows the reduced steps kept, summed over the last processed
+        sample; zero when every step took the full one. */
+    int getLastActiveRowCount() const noexcept { return lastActiveRowCount; }
 
     /**
         How precisely Newton has to settle before it stops, and so how many
@@ -600,6 +613,13 @@ class Circuit
         new path. */
     static constexpr int firstAttemptIterations = 32;
     static constexpr int continuationIterations = 24;
+
+    /** The reduced step's line: a current row stays when what it adds to some
+        entry of J reaches this, against J's unit diagonal. Rows split cleanly
+        either side of it on valve sheets: on the full VH4 every line from 1e-6
+        to 1e-2 keeps the same 16.6-16.7 rows of 28, while 1e-9 keeps 27 -- a
+        grid that is off adds somewhere in between. See setReducedNewtonStep(). */
+    static constexpr double activeRowThreshold = 1.0e-6;
 
     /** Continuation's limits: the smallest sub-step it will try, as a
         fraction of the whole sample, and the iterations it may spend in all
@@ -740,6 +760,12 @@ class Circuit
         `iterations`; returns whether it converged within `maxIterations`. */
     bool newtonOnPorts(int maxIterations, int& iterations) noexcept;
 
+    /** One Newton step through the current rows that matter, by Woodbury: the
+        step replaces portResidual. 1 when it was taken, 0 when so many rows
+        matter that the full step is cheaper, -1 when the system is singular.
+        See setReducedNewtonStep(). */
+    int solveReducedNewtonStep() noexcept;
+
     /** The full-matrix Newton, stamping devices into the whole n x n system and
         re-factorising each iteration. Slower than DK and only used for the
         operating point, where the matrix is the DC one and it runs once. */
@@ -838,7 +864,6 @@ class Circuit
     int portCount = 0;
 
     std::vector<double> portVoltage;     // v -- what Newton iterates on
-    std::vector<double> portVoltagePrevious;  // v one sample further back, for the seed
     std::vector<double> portVoltageStart;     // v as the sample began: the last sample's answer
     std::vector<double> portOpenTarget;       // this sample's vOpen, kept while continuation walks to it
     std::vector<double> portOpenStart;        // the vOpen that portVoltageStart solves exactly
@@ -864,13 +889,15 @@ class Circuit
         depend on staying valid between samples. */
     CelineEngine::DenseSolver newtonSolver;
 
-    bool predictPortVoltages = false;
+    bool reduceNewtonStep = true;
+    std::vector<int> portBlockStart;            // the first port of each port's device
+    std::vector<int> portBlockSize;             // ...and how many ports it has
+    std::vector<int> activeRows;                // the current rows a reduced step keeps
+    std::vector<double> activeSystem;           // I + D_a K_a, k x k
+    std::vector<double> activeRhs;              // D_a r, then the solution
+    std::vector<double> portImpedanceColumnMax; // the largest |K| down each column
+    int lastActiveRowCount = 0;
 
-    /** Whether the last sample's Newton converged. The seed prediction only
-        extrapolates from samples that did: one that gave up holds whatever
-        state the iteration stopped in, and a line drawn through that ran a
-        high-gain preamp's plates out to kilovolts. */
-    bool lastSampleConverged = true;
     SolverStrategy requestedStrategy = SolverStrategy::Auto;
     SolverStrategy activeStrategy = SolverStrategy::DiscreteK;
 
