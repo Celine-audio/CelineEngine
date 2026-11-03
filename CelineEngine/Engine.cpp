@@ -962,6 +962,7 @@ void Circuit::clearState() noexcept
     std::fill(portVoltage.begin(), portVoltage.end(), 0.0);
     std::fill(portVoltagePrevious.begin(), portVoltagePrevious.end(), 0.0);
     lastIterationCount = 0;
+    lastSampleConverged = true;
 }
 
 void Circuit::reset()

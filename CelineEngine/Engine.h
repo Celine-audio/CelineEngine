@@ -591,6 +591,31 @@ class Circuit
     double convergenceAbsTolerance = 1.0e-5;
     double convergenceRelTolerance = 1.0e-4;
 
+    /** Iterations a sample gets before it falls back on continuation, and
+        each continuation sub-step's own allowance. See solveWithDk().
+
+        The first is set above what any sheet that always converged was ever
+        measured to need (25), so those sheets never reach continuation and
+        render bit-for-bit as before; only samples that used to fail take the
+        new path. */
+    static constexpr int firstAttemptIterations = 32;
+    static constexpr int continuationIterations = 24;
+
+    /** Continuation's limits: the smallest sub-step it will try, as a
+        fraction of the whole sample, and the iterations it may spend in all
+        before giving the sample up. The budget is the one meant to bind: it
+        keeps one pathological sample from costing a block. The floor sits far
+        below any step yet needed -- a squared-off edge through four stages
+        needed sub-steps of about 1/1600 of a sample, past the 1/1024 this
+        once stopped at. */
+    static constexpr double minContinuationStride = 1.0 / 1048576.0; // 2^-20
+    static constexpr int continuationBudget = 960;
+
+    /** Passes settleLimiters() may take. A plate's limiter moves 100 V a
+        pass and a junction's a few tenths of a volt near its knee, so a
+        handful is typical; this is a backstop. */
+    static constexpr int maxLimiterSettlingPasses = 64;
+
     /** Hard cap on iterations. Around three is typical thanks to warm starting,
         so hitting this means something has gone badly non-smooth. Set generously:
         an occasional expensive sample is far cheaper than giving up on one and
@@ -682,6 +707,11 @@ class Circuit
         any of them had to damp the step. */
     bool limitPortVoltages() noexcept;
 
+    /** Sets portVoltage to `target` and moves every device's step-limiter
+        memory there, so Newton can restart from a known point. See
+        EngineSolve.cpp. */
+    void settleLimiters(const std::vector<double>& target) noexcept;
+
     /** Linearises every device about `portVoltage`, filling portCurrent and the
         block-diagonal portJacobian. */
     void linearisePorts() noexcept;
@@ -704,6 +734,11 @@ class Circuit
     /** The per-sample path: one linear solve for vOpen, Newton on the m ports,
         then recover the node voltages. Returns false if Newton gave up. */
     bool solveWithDk(double vIn) noexcept;
+
+    /** Newton on the port voltages against the current portOpenVoltage, from
+        whatever portVoltage holds. Adds the iterations it used to
+        `iterations`; returns whether it converged within `maxIterations`. */
+    bool newtonOnPorts(int maxIterations, int& iterations) noexcept;
 
     /** The full-matrix Newton, stamping devices into the whole n x n system and
         re-factorising each iteration. Slower than DK and only used for the
@@ -804,6 +839,10 @@ class Circuit
 
     std::vector<double> portVoltage;     // v -- what Newton iterates on
     std::vector<double> portVoltagePrevious;  // v one sample further back, for the seed
+    std::vector<double> portVoltageStart;     // v as the sample began: the last sample's answer
+    std::vector<double> portOpenTarget;       // this sample's vOpen, kept while continuation walks to it
+    std::vector<double> portOpenStart;        // the vOpen that portVoltageStart solves exactly
+    std::vector<double> portVoltageReached;   // v at the furthest continuation sub-step that converged
     std::vector<double> portCurrent;     // i(v)
     std::vector<double> portOpenVoltage; // vOpen -- port voltages with the devices removed
     std::vector<double> portJacobian;    // di/dv, block diagonal, stored m x m
@@ -826,6 +865,12 @@ class Circuit
     CelineEngine::DenseSolver newtonSolver;
 
     bool predictPortVoltages = false;
+
+    /** Whether the last sample's Newton converged. The seed prediction only
+        extrapolates from samples that did: one that gave up holds whatever
+        state the iteration stopped in, and a line drawn through that ran a
+        high-gain preamp's plates out to kilovolts. */
+    bool lastSampleConverged = true;
     SolverStrategy requestedStrategy = SolverStrategy::Auto;
     SolverStrategy activeStrategy = SolverStrategy::DiscreteK;
 

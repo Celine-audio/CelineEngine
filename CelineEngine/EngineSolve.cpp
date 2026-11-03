@@ -432,6 +432,10 @@ void Circuit::buildPortList()
     portInputCoupling.assign(m, 0.0);
     portVoltage.assign(m, 0.0);
     portVoltagePrevious.assign(m, 0.0);
+    portVoltageStart.assign(m, 0.0);
+    portOpenTarget.assign(m, 0.0);
+    portOpenStart.assign(m, 0.0);
+    portVoltageReached.assign(m, 0.0);
     portCurrent.assign(m, 0.0);
     portOpenVoltage.assign(m, 0.0);
     portResidual.assign(m, 0.0);
@@ -470,6 +474,32 @@ bool Circuit::limitPortVoltages() noexcept
         });
 
     return limited;
+}
+
+void Circuit::settleLimiters(const std::vector<double>& target) noexcept
+{
+    // Each device's limiter damps a step against the voltage it last
+    // linearised around, which it remembers. Restarting Newton from a known
+    // point needs that memory moved there first: otherwise the first iteration
+    // clamps the start towards wherever the abandoned attempt was -- up to ten
+    // volts on a grid, a hundred on a plate -- and the restart begins from a
+    // point that solves nothing. Measured: continuation failing its very first
+    // sub-step, a thousandth of a sample from an exact solution.
+    //
+    // Limiting towards the target until no device acts moves every memory
+    // there by each device's own rules, polarity and reflections included,
+    // with nothing device-specific here. A limiter that does not act has
+    // recorded exactly the voltage it was given -- which every limiter must
+    // reach for Newton to converge at all, so this ends.
+    for (int pass = 0; pass < maxLimiterSettlingPasses; ++pass)
+    {
+        std::copy(target.begin(), target.end(), portVoltage.begin());
+
+        if (! limitPortVoltages())
+            break;
+    }
+
+    std::copy(target.begin(), target.end(), portVoltage.begin());
 }
 
 void Circuit::linearisePorts() noexcept
@@ -667,63 +697,18 @@ bool Circuit::writeBackSolution(bool checkConvergence) noexcept
     return converged;
 }
 
-bool Circuit::solveWithDk(double vIn) noexcept
+bool Circuit::newtonOnPorts(int maxIterations, int& iterations) noexcept
 {
-    const auto n = static_cast<size_t>(systemSize);
-
-    // Step one: solve the circuit as if the nonlinear devices weren't there.
-    std::copy(rhs.begin(), rhs.end(), linearSolution.begin());
-    solver.solveInPlace(linearSolution.data());
-
-    for (int p = 0; p < portCount; ++p)
-    {
-        const int ra = portRowA[static_cast<size_t>(p)];
-        const int rb = portRowB[static_cast<size_t>(p)];
-
-        double v = portInputCoupling[static_cast<size_t>(p)] * vIn;
-        if (ra >= 0)
-            v += linearSolution[static_cast<size_t>(ra)];
-        if (rb >= 0)
-            v -= linearSolution[static_cast<size_t>(rb)];
-
-        portOpenVoltage[static_cast<size_t>(p)] = v;
-    }
-
-    // Step two: Newton on the ports alone. v carries over from the previous
-    // sample, which is why this usually takes two or three passes.
-    //
-    // With prediction on it carries over *extrapolated*: a port moving in a
-    // straight line is more likely to end where the line points. A wild guess
-    // costs nothing extra, since limitPortVoltages() damps it on the first pass
-    // exactly as it damps any other overshoot.
-    if (predictPortVoltages)
-    {
-        for (int p = 0; p < portCount; ++p)
-        {
-            const auto i = static_cast<size_t>(p);
-            const double lastSample = portVoltage[i];
-
-            portVoltage[i] = 2.0 * lastSample - portVoltagePrevious[i];
-            portVoltagePrevious[i] = lastSample;
-        }
-    }
-    else
-    {
-        // Kept in step even when unused, so switching prediction on mid-stream
-        // extrapolates from real history rather than from stale zeros.
-        std::copy(portVoltage.begin(), portVoltage.end(), portVoltagePrevious.begin());
-    }
-    //
     // Convergence is tested at the top of the loop rather than the bottom, so
     // that when it exits the port currents were evaluated at the very port
     // voltages it's exiting with. Testing at the bottom would leave the two one
-    // step out of step, and step three below would then push slightly stale
-    // currents back into the circuit.
+    // step out of step, and the recovery in solveWithDk() would then push
+    // slightly stale currents back into the circuit.
     int iteration = 0;
     bool converged = false;
     bool stepWasSmall = false;
 
-    while (iteration < maxNewtonIterations)
+    while (iteration < maxIterations)
     {
         ++iteration;
 
@@ -792,7 +777,10 @@ bool Circuit::solveWithDk(double vIn) noexcept
         // Built for this one solve and rebuilt next iteration, so factorised and
         // solved in one pass.
         if (! portSolver.factoriseAndSolve(portResidual.data()))
+        {
+            iterations += iteration;
             return false;
+        }
 
         stepWasSmall = true;
         for (int p = 0; p < portCount; ++p)
@@ -807,7 +795,147 @@ bool Circuit::solveWithDk(double vIn) noexcept
         }
     }
 
-    lastIterationCount = iteration;
+    iterations += iteration;
+    return converged;
+}
+
+bool Circuit::solveWithDk(double vIn) noexcept
+{
+    const auto n = static_cast<size_t>(systemSize);
+
+    // Step one: solve the circuit as if the nonlinear devices weren't there.
+    std::copy(rhs.begin(), rhs.end(), linearSolution.begin());
+    solver.solveInPlace(linearSolution.data());
+
+    for (int p = 0; p < portCount; ++p)
+    {
+        const int ra = portRowA[static_cast<size_t>(p)];
+        const int rb = portRowB[static_cast<size_t>(p)];
+
+        double v = portInputCoupling[static_cast<size_t>(p)] * vIn;
+        if (ra >= 0)
+            v += linearSolution[static_cast<size_t>(ra)];
+        if (rb >= 0)
+            v -= linearSolution[static_cast<size_t>(rb)];
+
+        portOpenVoltage[static_cast<size_t>(p)] = v;
+    }
+
+    // Where this sample starts from: the last sample's answer, which is also
+    // where continuation below walks from if Newton cannot get here directly.
+    std::copy(portVoltage.begin(), portVoltage.end(), portVoltageStart.begin());
+
+    // Step two: Newton on the ports alone. v carries over from the previous
+    // sample, which is why this usually takes two or three passes.
+    //
+    // With prediction on it carries over *extrapolated*: a port moving in a
+    // straight line is more likely to end where the line points. A wild guess
+    // costs nothing extra, since limitPortVoltages() damps it on the first pass
+    // exactly as it damps any other overshoot.
+    if (predictPortVoltages && lastSampleConverged)
+    {
+        for (int p = 0; p < portCount; ++p)
+        {
+            const auto i = static_cast<size_t>(p);
+            const double lastSample = portVoltage[i];
+
+            portVoltage[i] = 2.0 * lastSample - portVoltagePrevious[i];
+            portVoltagePrevious[i] = lastSample;
+        }
+    }
+    else
+    {
+        // Kept in step even when unused, so switching prediction on mid-stream
+        // extrapolates from real history rather than from stale zeros.
+        std::copy(portVoltage.begin(), portVoltage.end(), portVoltagePrevious.begin());
+    }
+
+    int iterations = 0;
+    bool converged = newtonOnPorts(firstAttemptIterations, iterations);
+
+    // Continuation. Between one sample and the next, all that changes in the
+    // port equations is vOpen -- K and the devices hold -- and the sample
+    // began from the answer to the last one. So when Newton cannot get from
+    // there to here in one go, it is walked there: back to where the sample
+    // started, then towards this sample's vOpen in sub-steps, each starting
+    // close to its own answer. The last sub-step is this sample's own
+    // equation, so the answer is the one a plain solve converging would have
+    // found; only the route differs.
+    //
+    // A valve driven into grid current turns over -- its plate current's slope
+    // against the grid changes sign within a fraction of a volt -- and two such
+    // stages coupled through a 100k-odd plate load (a gain stage DC-coupled to
+    // a cathode follower, as in most high-gain preamps) leave Newton a
+    // straight-line model good for a few tens of millivolts. And where a grid
+    // crosses the onset of grid current its conductance falls from tens of
+    // kilohms to nothing within millivolts, which with a cascade's gain behind
+    // it Newton orbits rather than settles on. On a Diezel and a
+    // Dual Rectifier preamp it cycled or crawled to the iteration cap on
+    // samples a guitar plays constantly, and each one it gave up on came out
+    // as a click. With this, none do. Damping the step instead was measured
+    // too: it made every sample on those sheets pay to save the few.
+    //
+    // The starting point's own vOpen is recomputed rather than remembered: the
+    // DK equation v = vOpen - K i(v), read backwards, gives the vOpen the start
+    // solves exactly, even if the sample before had itself given up.
+    if (! converged)
+    {
+        const auto m = static_cast<size_t>(portCount);
+
+        std::copy(portOpenVoltage.begin(), portOpenVoltage.end(), portOpenTarget.begin());
+        std::copy(portVoltageStart.begin(), portVoltageStart.end(), portVoltage.begin());
+        linearisePorts();
+
+        for (size_t p = 0; p < m; ++p)
+        {
+            double open = portVoltageStart[p];
+            for (size_t q = 0; q < m; ++q)
+                open += portImpedance[p * m + q] * portCurrent[q];
+            portOpenStart[p] = open;
+        }
+
+        // Adaptive: a sub-step that converges is kept and the next one is
+        // twice as long; one that does not is retried from the last that did,
+        // half as long. The small steps go only where the trouble is. No step
+        // runs past the end of the sample, so a last step that fails is tried
+        // again shorter -- not again from the same point, which can only fail
+        // the same way.
+        settleLimiters(portVoltageStart);
+        std::copy(portVoltageStart.begin(), portVoltageStart.end(), portVoltageReached.begin());
+
+        const int budget = iterations + continuationBudget;
+        double reached = 0.0;
+        double stride = 0.25;
+
+        while (reached < 1.0 && stride >= minContinuationStride && iterations < budget)
+        {
+            const bool lastStep = stride >= 1.0 - reached;
+            if (lastStep)
+                stride = 1.0 - reached;
+
+            const double t = lastStep ? 1.0 : reached + stride;
+            for (size_t p = 0; p < m; ++p)
+                portOpenVoltage[p] = portOpenStart[p] + t * (portOpenTarget[p] - portOpenStart[p]);
+
+            if (newtonOnPorts(continuationIterations, iterations))
+            {
+                reached = t;
+                stride *= 2.0;
+                std::copy(portVoltage.begin(), portVoltage.end(), portVoltageReached.begin());
+            }
+            else
+            {
+                stride *= 0.5;
+                settleLimiters(portVoltageReached);
+            }
+        }
+
+        converged = reached >= 1.0;
+        std::copy(portOpenTarget.begin(), portOpenTarget.end(), portOpenVoltage.begin());
+    }
+
+    lastIterationCount = iterations;
+    lastSampleConverged = converged;
 
     // Step three: put the converged device currents back into the circuit.
     // z = zLinear - W i.
