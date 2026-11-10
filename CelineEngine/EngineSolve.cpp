@@ -23,70 +23,6 @@ namespace
         to anything else in an audio circuit, large enough not to wreck the
         matrix conditioning. */
     constexpr double dcInductorConductance = 1.0e3; // 1 milliohm
-
-    /** Solves the n x n row-major system a x = b in place, b becoming x, by
-        Gaussian elimination with partial pivoting -- DenseSolver's
-        factoriseAndSolve(), on a size chosen per call. The reduced Newton step
-        needs that: its size changes from one step to the next, and resizing a
-        DenseSolver allocates. False if a pivot vanishes. */
-    bool solveInPlace(double* a, double* b, int n) noexcept
-    {
-        for (int k = 0; k < n; ++k)
-        {
-            int pivotRow = k;
-            double maxAbs = std::abs(a[k * n + k]);
-
-            for (int row = k + 1; row < n; ++row)
-            {
-                const double v = std::abs(a[row * n + k]);
-                if (v > maxAbs)
-                {
-                    maxAbs = v;
-                    pivotRow = row;
-                }
-            }
-
-            if (pivotRow != k)
-            {
-                std::swap_ranges(a + k * n + k, a + k * n + n, a + pivotRow * n + k);
-                std::swap(b[k], b[pivotRow]);
-            }
-
-            const double pivot = a[k * n + k];
-            if (std::abs(pivot) < 1.0e-300)
-                return false;
-
-            // The reciprocal goes back on the diagonal, which nothing reads
-            // again except the back substitution, so it multiplies.
-            const double invPivot = 1.0 / pivot;
-            a[k * n + k] = invPivot;
-
-            for (int row = k + 1; row < n; ++row)
-            {
-                const double factor = a[row * n + k] * invPivot;
-                if (factor != 0.0)
-                {
-                    for (int col = k + 1; col < n; ++col)
-                        a[row * n + col] -= factor * a[k * n + col];
-
-                    b[row] -= factor * b[k];
-                }
-            }
-        }
-
-        for (int col = n - 1; col >= 0; --col)
-        {
-            const double x = b[col] * a[col * n + col];
-            b[col] = x;
-            if (x == 0.0)
-                continue;
-
-            for (int row = 0; row < col; ++row)
-                b[row] -= a[row * n + col] * x;
-        }
-
-        return true;
-    }
 } // namespace
 
 //==============================================================================
@@ -862,7 +798,7 @@ int Circuit::solveReducedNewtonStep() noexcept
         activeRhs[i] = y;
     }
 
-    if (! solveInPlace(system, activeRhs.data(), k))
+    if (! CelineEngine::DenseSolver::eliminateAndSolve(system, activeRhs.data(), k))
         return -1;
 
     // step = r - K_a z, a column of K at a time.
@@ -1146,10 +1082,10 @@ bool Circuit::runFullNewton(const double* baseMatrix, const double* baseRhs) noe
         std::copy_n(baseMatrix, matrixElements, newtonSolver.data());
         std::copy_n(baseRhs, vectorElements, work.data());
 
-        if (! newtonSolver.factorise())
+        // Solved once and rebuilt next time: no factors kept for later solves.
+        if (! newtonSolver.factoriseAndSolve(work.data()))
             return false;
 
-        newtonSolver.solveInPlace(work.data());
         writeBackSolution();
         lastIterationCount = 1;
         return true;
@@ -1170,10 +1106,10 @@ bool Circuit::runFullNewton(const double* baseMatrix, const double* baseRhs) noe
         linearisePorts();
         stampPorts(newtonSolver.data(), work.data());
 
-        if (! newtonSolver.factorise())
+        // A Jacobian is used for one solve, so the factors solveInPlace() would
+        // need are never built.
+        if (! newtonSolver.factoriseAndSolve(work.data()))
             return false;
-
-        newtonSolver.solveInPlace(work.data());
 
         // A step the limiter had to damp isn't a converged one, however small the
         // resulting voltage change looked.

@@ -64,7 +64,25 @@ namespace CelineEngine
             if the matrix is singular. */
         bool factoriseAndSolve(double* rhs) noexcept;
 
+        /** Solves the n x n row-major system a x = rhs in place by Gaussian
+            elimination with partial pivoting, rhs becoming x and a destroyed.
+            1/U(k,k) goes into `invDiagonal` when given, otherwise onto a's own
+            diagonal, which needs no storage of its own -- for a system whose size
+            changes from call to call, where a sized DenseSolver would allocate.
+
+            The one statement of the elimination: factoriseAndSolve() and the
+            reduced Newton step both call it, and a test holds them to the bit.
+            False if a pivot vanishes. */
+        static bool eliminateAndSolve(double* a, double* rhs, int n,
+                                      double* invDiagonal = nullptr) noexcept;
+
        private:
+        /** The row at or below k with the largest entry in column k. */
+        static int pivotRowFor(const double* a, int n, int k) noexcept;
+
+        /** A pivot smaller than this means the matrix is singular. */
+        static constexpr double singularPivot = 1.0e-300;
+
         int dimension = 0;
         std::vector<double> matrix;      // n x n, row-major; holds L and U after factorise()
         std::vector<int> rowSwaps;       // pivot row chosen at each elimination step

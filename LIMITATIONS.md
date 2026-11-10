@@ -271,10 +271,10 @@ Measured: **+7%** on a three-stage 12AX7 preamp, **+23%** on a six-triode
 channel. An earlier version of this file said 3%, from a circuit too
 small for the state vector to matter; treat that as withdrawn.
 
-That cost is why it is the first thing `BuildOptions` lets you switch off (the
-Settings menu in the editor). Off is a real inaccuracy, not a cheaper way to get
-the same answer — the top end stops rolling off — so it is opt-in and travels
-with the saved sheet.
+It is always on. It used to be a `BuildOptions` switch, traded for CPU, but off
+was a real inaccuracy rather than a cheaper way to the same answer -- the top end
+stops rolling off -- so the switch was removed. A sheet saved with it still
+carries the property; Céline ignores it.
 
 How much it matters depends almost entirely on **what drives the grid**, since
 the capacitance only acts against a source impedance. Measured here on a 12AX7
@@ -535,8 +535,8 @@ it stays perfectly linear however hard you hit it.
   effect (VAF) and junction capacitances (CJE/CJC) are modelled for the parts
   whose cards publish them — the silicon small-signal pair, datasheet Cobo for
   the 2N2222A/2N5133/BC109C, the NTE102/103 and the 2SC2240 —
-  and both are **on by default**, like everything else here — turn them off
-  under Settings → Performance if you need the CPU back. VAF
+  and both are **always on**: the switch that traded them for CPU was removed,
+  like the valve capacitance one. VAF
   reads as an output resistance ro = VAF/Ic, a few percent of a stage's gain.
   It is Gummel-Poon's form, dividing by q1 = 1 / (1 − Vbc/VAF), which is what
   every vendor's VAF means. It used to be the level-1 (1 + Vce/VAF), which
@@ -647,10 +647,16 @@ consequences worth knowing:
 
 ### A non-converged sample is used anyway
 
-Newton stops at `maxNewtonIterations = 64`. If it hits that, the loop exits,
-`nonConvergenceCount` increments, and *the last iterate is used as the answer*.
-`process()` guards against non-finite output by dropping state, but a value
-that is merely wrong and finite passes through silently.
+On the DK path (most sheets) a sample gets `firstAttemptIterations = 32` Newton
+iterations. If those fail, continuation walks the device equations from the last
+good state to this sample's in sub-steps, within `continuationBudget = 960`
+iterations in all (see `solveWithDk()`). Full Newton, used by small sheets and the
+operating-point solve, stops at `maxNewtonIterations = 64` instead.
+
+If a sample still does not converge, `nonConvergenceCount` increments and *the
+last state reached is used as the answer*. `process()` guards against non-finite
+output by dropping state, but a value that is merely wrong and finite passes
+through silently.
 
 Check `getNonConvergenceCount()` after a session if a circuit sounds off. It
 should be zero.

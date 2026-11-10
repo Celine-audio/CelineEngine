@@ -636,10 +636,10 @@ class Circuit
         handful is typical; this is a backstop. */
     static constexpr int maxLimiterSettlingPasses = 64;
 
-    /** Hard cap on iterations. Around three is typical thanks to warm starting,
-        so hitting this means something has gone badly non-smooth. Set generously:
-        an occasional expensive sample is far cheaper than giving up on one and
-        letting a visibly wrong value through. */
+    /** Iteration cap for full Newton (small sheets and the operating-point
+        solve). The DK path uses firstAttemptIterations and continuation instead.
+        Around three is typical thanks to warm starting, so hitting this means
+        something has gone badly non-smooth. */
     static constexpr int maxNewtonIterations = 64;
 
     /** How many steps the operating-point solve ramps the supplies over if it

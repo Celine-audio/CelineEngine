@@ -22,19 +22,7 @@ namespace CelineEngine
         for (int k = 0; k < n; ++k)
         {
             // Partial pivoting: swap in the row with the largest element in this column.
-            int pivotRow = k;
-            double maxAbs = std::abs(a[k * n + k]);
-
-            for (int row = k + 1; row < n; ++row)
-            {
-                const double v = std::abs(a[row * n + k]);
-                if (v > maxAbs)
-                {
-                    maxAbs = v;
-                    pivotRow = row;
-                }
-            }
-
+            const int pivotRow = pivotRowFor(a, n, k);
             rowSwaps[static_cast<size_t>(k)] = pivotRow;
 
             if (pivotRow != k)
@@ -46,7 +34,7 @@ namespace CelineEngine
             // models give every reactive branch a finite conductance, and gmin
             // backstops the nonlinear ones), so this means something is wrong with
             // the netlist rather than with the numerics.
-            if (std::abs(pivot) < 1.0e-300)
+            if (std::abs(pivot) < singularPivot)
                 return false;
 
             // Kept for the back substitution, which would otherwise divide by
@@ -83,27 +71,40 @@ namespace CelineEngine
         return true;
     }
 
+    int DenseSolver::pivotRowFor(const double* a, int n, int k) noexcept
+    {
+        int pivotRow = k;
+        double maxAbs = std::abs(a[k * n + k]);
+
+        for (int row = k + 1; row < n; ++row)
+        {
+            const double v = std::abs(a[row * n + k]);
+            if (v > maxAbs)
+            {
+                maxAbs = v;
+                pivotRow = row;
+            }
+        }
+
+        return pivotRow;
+    }
+
     bool DenseSolver::factoriseAndSolve(double* rhs) noexcept
     {
-        const int n = dimension;
-        double* a = matrix.data();
+        return eliminateAndSolve(matrix.data(), rhs, dimension, invDiagonal.data());
+    }
 
-        // The same elimination as factorise(), pivot for pivot, with the
-        // right-hand side swapped and reduced alongside each row.
+    bool DenseSolver::eliminateAndSolve(double* a, double* rhs, int n, double* invDiagonal) noexcept
+    {
+        // Where 1/U(k,k) lives: the given array, or a's diagonal.
+        double* inv = invDiagonal != nullptr ? invDiagonal : a;
+        const int invStride = invDiagonal != nullptr ? 1 : n + 1;
+
+        // factorise()'s elimination, pivot for pivot, with the right-hand side
+        // swapped and reduced alongside each row.
         for (int k = 0; k < n; ++k)
         {
-            int pivotRow = k;
-            double maxAbs = std::abs(a[k * n + k]);
-
-            for (int row = k + 1; row < n; ++row)
-            {
-                const double v = std::abs(a[row * n + k]);
-                if (v > maxAbs)
-                {
-                    maxAbs = v;
-                    pivotRow = row;
-                }
-            }
+            const int pivotRow = pivotRowFor(a, n, k);
 
             if (pivotRow != k)
             {
@@ -112,11 +113,11 @@ namespace CelineEngine
             }
 
             const double pivot = a[k * n + k];
-            if (std::abs(pivot) < 1.0e-300)
+            if (std::abs(pivot) < singularPivot)
                 return false;
 
             const double invPivot = 1.0 / pivot;
-            invDiagonal[static_cast<size_t>(k)] = invPivot;
+            inv[k * invStride] = invPivot;
 
             for (int row = k + 1; row < n; ++row)
             {
@@ -137,7 +138,7 @@ namespace CelineEngine
         // independent of the others, which is what matters.
         for (int col = n - 1; col >= 0; --col)
         {
-            const double x = rhs[col] * invDiagonal[static_cast<size_t>(col)];
+            const double x = rhs[col] * inv[col * invStride];
             rhs[col] = x;
             if (x == 0.0)
                 continue;
