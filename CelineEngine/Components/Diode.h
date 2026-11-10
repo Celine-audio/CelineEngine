@@ -254,10 +254,28 @@ namespace CircuitComponents
             on the 5.1 V part, 8 against 10 on the 9.1 V, and 103 and 39 ohms at
             1 mA against 550 and 50. Diodes Inc's BZT52 cards (the SOD-123
             version) are softer, 60 ohms at 5 mA, which is that family's own
-            limit rather than the BZX55's. */
+            limit rather than the BZX55's.
+
+            No transit time. The forward curve is the 1N4148's, but its 3.48 ns
+            of stored charge is that signal diode's own figure, not a Zener's,
+            and it came along when silicon() gained it in 1.3.0. At 48 kHz its
+            term is 1.7e-4 of the junction's own current, and in ngspice, with
+            the step free to shrink, it makes no difference. Here it broke
+            back-to-back Zeners in op-amp feedback (an Ampeg VH140C sheet,
+            GitHub issue 5): Newton stepped the node between the pair, held
+            only by the junction capacitances, by 1e8 V and never came back,
+            and the output read 1e38. Without it that sheet and a Randall RGT100
+            preamp run with no failed samples at any drive tried.
+
+            That is a fragile solve, not a stiff device: the failure comes and
+            goes with TT (none at 1 ps or 10 ns, failing at 0.1 to 3.5 ns), and
+            solving the failed sample again in 8 or 64 shorter steps does not
+            rescue it. Removing the term avoids it; what Newton does there is
+            still worth understanding. */
         static DiodeModel zener(double breakdownVolts) noexcept
         {
             DiodeModel model = silicon();
+            model.transitTime = 0.0;
             model.breakdownVoltage = breakdownVolts;
             model.breakdownCurrent = 5.0e-3;
             model.breakdownEmission = breakdownVolts < 5.0 ? 4.0 : 1.5;
