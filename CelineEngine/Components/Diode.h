@@ -3,6 +3,8 @@
 #include "Junction.h"
 #include "Ports.h"
 
+#include <iterator>
+
 namespace CircuitComponents
 {
     //==========================================================================
@@ -235,7 +237,8 @@ namespace CircuitComponents
         /** Red, as the usual default when a circuit just says "LED". */
         static DiodeModel led() noexcept { return redLed(); }
 
-        /** A Zener of the given voltage, on a silicon forward characteristic.
+        /** A Zener of the given voltage: Vishay's BZX55, the 500 mW DO-35
+            family a pedal or preamp uses.
 
             Two uses in a guitar circuit, and they want opposite things. As a
             supply clamp it just has to hold: pick a voltage above the rail and
@@ -244,42 +247,100 @@ namespace CircuitComponents
             and it clips one way at Vz and the other at a forward drop, so a
             single Zener is markedly asymmetric.
 
-            Below about 5 V the knee softens considerably on real parts, so the
-            emission coefficient is raised there to match.
+            Fitted to the BZX55 sheet (docs/specs/diodes/BZX55-Vishay.PDF, 2024,
+            curves digitised from the vector paths):
 
-            Checked against Vishay's BZX55 sheet (docs/specs/diodes), the
-            500 mW DO-35 family a pedal uses, which gives limits only: the
-            voltage at its 5 mA test current is exactly the nominal here, and
-            the slopes come in under its maxima -- 21 ohms at 5 mA against 35
-            on the 5.1 V part, 8 against 10 on the 9.1 V, and 103 and 39 ohms at
-            1 mA against 550 and 50. Diodes Inc's BZT52 cards (the SOD-123
-            version) are softer, 60 ohms at 5 mA, which is that family's own
-            limit rather than the BZX55's.
+            - Forward: Fig. 6, 25 C, one curve for the whole series. Is 1.007e-14 A
+              and N 1.096 land within 2.7 mV of it from 1 uA to 10 mA -- 0.522 /
+              0.587 / 0.652 / 0.718 / 0.783 V at 1 uA / 10 uA / 100 uA / 1 mA /
+              10 mA against 0.520 / 0.589 / 0.654 / 0.716 / 0.786. Above that
+              the sheet bends up on the die's resistance, 22 mV over this at
+              50 mA and 37 mV at 100 mA; a series resistance would follow it
+              there, at the cost of an internal node (30-50% on a clipper) for
+              currents a signal Zener does not see. A Zener is a heavily doped
+              junction, which is why this sits 0.1 V above a 1N4148 at a
+              milliamp: until 1.4.0 it borrowed the 1N4148's curve and clipped
+              forwards that much early.
 
-            No transit time. The forward curve is the 1N4148's, but its 3.48 ns
-            of stored charge is that signal diode's own figure, not a Zener's,
-            and it came along when silicon() gained it in 1.3.0. At 48 kHz its
-            term is 1.7e-4 of the junction's own current, and in ngspice, with
-            the step free to shrink, it makes no difference. Here it broke
-            back-to-back Zeners in op-amp feedback (an Ampeg VH140C sheet,
-            GitHub issue 5): Newton stepped the node between the pair, held
-            only by the junction capacitances, by 1e8 V and never came back,
-            and the output read 1e38. Without it that sheet and a Randall RGT100
-            preamp run with no failed samples at any drive tried.
+            - Capacitance: Fig. 5, at 2 V reverse, read off the curve for the
+              voltage asked for -- 104 pF on the 5.1 V part, 46 pF on the 9.1 V
+              -- held constant, as every junction capacitance here is. 2 V is
+              where the sheet measures it and within the swing of a Zener
+              clipping a signal. Below 5 V the curve leaves the chart straight
+              up at 4.92 V, to 175 pF, so the 3.9 and 4.3 V parts take 175 pF:
+              the sheet's last reading, and a floor (more doping, more
+              capacitance). It used to be the 1N4148's 0.7 pF.
 
-            That is a fragile solve, not a stiff device: the failure comes and
-            goes with TT (none at 1 ps or 10 ns, failing at 0.1 to 3.5 ns), and
-            solving the failed sample again in 8 or 64 shorter steps does not
-            rescue it. Removing the term avoids it; what Newton does there is
-            still worth understanding. */
+            - Breakdown: the sheet has no usable curve (Fig. 7 is drawn at 0 to
+              100 mA with mislabelled axes), so its table sets it. The voltage at
+              the 5 mA test current is the nominal. The knee's softness follows
+              the table's knee impedance, which drops from 450-600 ohms at 1 mA
+              on the parts up to 5.6 V to 200 at 6.2 V and 50 by 7.5 V: below
+              about 6 V a Zener breaks down by tunnelling, with a soft knee, and
+              above it by avalanche, with a sharp one. So the emission is 4 below
+              6 V and 1.5 above, giving 21 ohms at 5 mA against the 5.1 V part's
+              maximum of 35 and 103 ohms at 1 mA against 550; 7.8 ohms against
+              10 and 39 against 50 on the 9.1 V. The 3.9 and 4.3 V parts take
+              the same soft knee, well inside their looser limits (85 and 75
+              ohms at 5 mA, 600 at 1 mA); the table gives only maxima, so there
+              is nothing to set them softer by. The 5.1 V part was on the sharp
+              knee until 1.4.0, the threshold having been 5 V.
+
+            - Transit time: the BZX55 sheet does not give one, so it is Diodes
+              Inc's 50.1 ns from their BZT52 cards (docs/specs/diodes/spice),
+              the same planar 500 mW Zener in an SOD-123. The BZT52's own
+              breakdown and capacitance are not used: that family is softer
+              (60 ohms at 5 mA on the 5.1 V) than the BZX55's limits allow.
+
+            Zeners had no transit time for a while in 1.4.0's development, after
+            back-to-back Zeners in op-amp feedback blew up (GitHub issue 5). The
+            cause was not the stored charge: Newton stopped on a small step with
+            the circuit's equations still out by volts, and the charge, read from
+            the nodes, turned that into 3e26 A. newtonOnPorts() checks the
+            residual now. */
         static DiodeModel zener(double breakdownVolts) noexcept
         {
-            DiodeModel model = silicon();
-            model.transitTime = 0.0;
+            DiodeModel model;
+            model.saturationCurrent = 1.007e-14;
+            model.emissionCoefficient = 1.096;
+            model.junctionCapacitance = bzx55Capacitance(breakdownVolts);
+            model.transitTime = 50.1e-9;
             model.breakdownVoltage = breakdownVolts;
             model.breakdownCurrent = 5.0e-3;
-            model.breakdownEmission = breakdownVolts < 5.0 ? 4.0 : 1.5;
+            model.breakdownEmission = breakdownVolts < 6.0 ? 4.0 : 1.5;
             return model;
+        }
+
+        /** The BZX55's capacitance at 2 V reverse against its Zener voltage
+            (Fig. 5 of Vishay's sheet, digitised), interpolated. The sheet's
+            curve runs from 4.92 V, where it goes straight up to 175 pF, to
+            20 V; outside that this holds its end values. */
+        static double bzx55Capacitance(double breakdownVolts) noexcept
+        {
+            struct Point
+            {
+                double volts, farads;
+            };
+
+            static constexpr Point curve[] = {
+                {4.92, 174.7e-12}, {5.0, 108.6e-12}, {5.5, 92.1e-12}, {6.0, 81.2e-12},
+                {6.5, 72.9e-12}, {7.0, 66.0e-12}, {8.0, 55.2e-12}, {9.0, 46.9e-12},
+                {10.0, 40.2e-12}, {11.0, 34.8e-12}, {12.0, 30.5e-12}, {14.0, 24.1e-12},
+                {16.0, 20.2e-12}, {18.0, 18.3e-12}, {20.0, 18.0e-12}};
+
+            constexpr auto last = std::size(curve) - 1;
+
+            if (breakdownVolts <= curve[0].volts)
+                return curve[0].farads;
+
+            for (size_t k = 1; k <= last; ++k)
+                if (breakdownVolts <= curve[k].volts)
+                {
+                    const double t = (breakdownVolts - curve[k - 1].volts) / (curve[k].volts - curve[k - 1].volts);
+                    return curve[k - 1].farads + t * (curve[k].farads - curve[k - 1].farads);
+                }
+
+            return curve[last].farads;
         }
 
         /** 1N4001, the 1 A general-purpose rectifier -- and the TS808-mod

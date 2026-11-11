@@ -850,6 +850,7 @@ void Circuit::prepare(double sampleRate)
     work.assign(n, 0.0);
     linearSolution.assign(n, 0.0);
     nodeVoltage.assign(numNodes, 0.0);
+    heldNodeVoltage.assign(numNodes, 0.0);
 
     newtonSolver.resize(systemSize);
 

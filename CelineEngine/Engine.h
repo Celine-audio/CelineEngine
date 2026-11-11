@@ -513,7 +513,9 @@ class Circuit
 
     /** Counts samples since prepare() where Newton hit the iteration limit without
         converging. Should stay at zero; a non-zero value means the circuit is
-        being pushed somewhere the solver struggles with. */
+        being pushed somewhere the solver struggles with. Each such sample is
+        held: the output repeats the one before and the circuit's state does
+        not move, rather than taking whatever Newton had when it gave up. */
     int getNonConvergenceCount() const noexcept { return nonConvergenceCount; }
 
     /** True if the per-sample matrix factorised.
@@ -752,7 +754,8 @@ class Circuit
     void precomputeDkSystem();
 
     /** The per-sample path: one linear solve for vOpen, Newton on the m ports,
-        then recover the node voltages. Returns false if Newton gave up. */
+        then recover the node voltages. Returns false if Newton gave up, having
+        written nothing and put the ports back where the sample began. */
     bool solveWithDk(double vIn) noexcept;
 
     /** Newton on the port voltages against the current portOpenVoltage, from
@@ -783,6 +786,10 @@ class Circuit
 
     /** Rolls capacitor/inductor companion state forward using the voltages just solved. */
     void updateReactiveState() noexcept;
+
+    /** Moves the AC sources on by one sample: what time does to the circuit
+        even when a sample is held. Part of updateReactiveState(). */
+    void advanceSources() noexcept;
 
     /** Zeroes reactive and Newton state without solving an operating point. */
     void clearState() noexcept;
@@ -833,6 +840,7 @@ class Circuit
     std::vector<double> rhs;           // per-sample right-hand side
     std::vector<double> work;          // scratch the solver overwrites with the solution
     std::vector<double> nodeVoltage;   // per node, known nodes included
+    std::vector<double> heldNodeVoltage; // full Newton: the nodes as the sample began, to hold a failed one
     std::vector<double> dcMatrix;      // DC operating-point system, built by buildDcSystem()
     std::vector<double> dcRhs;
 

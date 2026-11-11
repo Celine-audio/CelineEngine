@@ -834,12 +834,6 @@ bool Circuit::newtonOnPorts(int maxIterations, int& iterations) noexcept
         const bool limited = limitPortVoltages();
         linearisePorts();
 
-        if (stepWasSmall && ! limited)
-        {
-            converged = true;
-            break;
-        }
-
         // F(v) = v - vOpen + K i(v),  J = I + K di/dv
         //
         // K i a column at a time: each port's current is spread over every
@@ -858,6 +852,40 @@ bool Circuit::newtonOnPorts(int maxIterations, int& iterations) noexcept
             const double* column = portImpedanceByColumn.data() + static_cast<size_t>(q * portCount);
             for (int p = 0; p < portCount; ++p)
                 portResidual[static_cast<size_t>(p)] -= column[p] * current;
+        }
+
+        // Converged when the last step was small *and* the circuit's equations
+        // hold here. A small step alone is not enough: the step is the residual
+        // over J = I + K di/dv, and where a conducting junction sits behind a
+        // large impedance K di/dv runs to a million -- a node held only by
+        // small capacitances, the inputs of an op-amp. A step inside tolerance
+        // there left the residual at 6 V (GitHub issue 5, back-to-back Zeners
+        // in op-amp feedback), and the residual is exactly how far the node
+        // voltages written back, z = zLinear - W i, sit from the port voltages
+        // Newton settled on. The capacitors then integrated voltages the
+        // devices never saw, and a diode's stored charge, read from those nodes,
+        // took an exponential of 7 V: 3e26 A, and the next sample blew up.
+        // SPICE checks the device currents for the same reason.
+        if (stepWasSmall && ! limited)
+        {
+            bool residualSmall = true;
+
+            for (int p = 0; p < portCount; ++p)
+            {
+                const double v = portVoltage[static_cast<size_t>(p)];
+
+                if (std::abs(portResidual[static_cast<size_t>(p)]) > convergenceAbsTolerance + convergenceRelTolerance * std::abs(v))
+                {
+                    residualSmall = false;
+                    break;
+                }
+            }
+
+            if (residualSmall)
+            {
+                converged = true;
+                break;
+            }
         }
 
         // Solve J step = residual: through the current rows that matter when
@@ -1047,6 +1075,17 @@ bool Circuit::solveWithDk(double vIn) noexcept
 
     lastIterationCount = iterations;
 
+    // A sample that did not converge is not kept -- see process(). Newton is
+    // put back where the sample began, so the next one starts from the last
+    // answer that was right rather than from wherever this one gave up, and
+    // nothing is written to the nodes.
+    if (! converged)
+    {
+        std::copy(portVoltageStart.begin(), portVoltageStart.end(), portVoltage.begin());
+        settleLimiters(portVoltageStart);
+        return false;
+    }
+
     // Step three: put the converged device currents back into the circuit.
     // z = zLinear - W i.
     std::copy(linearSolution.begin(), linearSolution.end(), work.begin());
@@ -1063,7 +1102,7 @@ bool Circuit::solveWithDk(double vIn) noexcept
     }
 
     writeBackSolution(false);
-    return converged;
+    return true;
 }
 
 bool Circuit::runFullNewton(const double* baseMatrix, const double* baseRhs) noexcept
@@ -1230,7 +1269,7 @@ void Circuit::buildRightHandSide(double vIn) noexcept
         stampCurrentSource(rhsVector, l.a, l.b, -(l.iPrev + l.conductance * l.vPrev));
 }
 
-void Circuit::updateReactiveState() noexcept
+void Circuit::advanceSources() noexcept
 {
     for (auto& source : voltageSources)
     {
@@ -1242,6 +1281,11 @@ void Circuit::updateReactiveState() noexcept
                 source.phase -= 2.0 * juce::MathConstants<double>::pi;
         }
     }
+}
+
+void Circuit::updateReactiveState() noexcept
+{
+    advanceSources();
 
     for (auto& c : capacitors)
     {
@@ -1291,6 +1335,7 @@ float Circuit::process(float vIn)
 
     nodeVoltage[static_cast<size_t>(inputIndex)] = vIn;
     buildRightHandSide(vIn);
+    bool held = false;
 
     if (portCount == 0)
     {
@@ -1305,15 +1350,43 @@ float Circuit::process(float vIn)
     }
     else if (activeStrategy == SolverStrategy::DiscreteK)
     {
-        if (! solveWithDk(vIn))
-            ++nonConvergenceCount;
+        held = ! solveWithDk(vIn);
     }
-    else if (! runFullNewton(linearMatrix.data(), rhs.data()))
+    else
     {
-        ++nonConvergenceCount;
+        // Full Newton iterates on the node voltages themselves, so holding
+        // needs a copy of them. These are the small circuits (no more unknowns
+        // than ports), so it is a handful of doubles.
+        std::copy(nodeVoltage.begin(), nodeVoltage.end(), heldNodeVoltage.begin());
+
+        if (! runFullNewton(linearMatrix.data(), rhs.data()))
+        {
+            std::copy(heldNodeVoltage.begin(), heldNodeVoltage.end(), nodeVoltage.begin());
+            readPortVoltagesFromNodes();
+            std::copy(portVoltage.begin(), portVoltage.end(), portVoltageStart.begin());
+            settleLimiters(portVoltageStart);
+            held = true;
+        }
     }
 
-    updateReactiveState();
+    // A sample that did not converge is held: the nodes, the capacitors, the
+    // inductors and the stored charge stay as the last sample left them, and
+    // the output repeats it. What Newton had when it gave up is not a voltage
+    // the circuit can have -- written back, it went into the capacitors too,
+    // so one bad sample became the next one's starting point and the output
+    // read 1e27-1e38 V for a second or more (GitHub issue 5). SPICE never keeps
+    // a point that did not converge either; it has a shorter step to retry
+    // with, which a fixed sample rate does not. Held, a failure is one repeated
+    // sample, and it is still counted.
+    if (held)
+    {
+        ++nonConvergenceCount;
+        advanceSources();
+    }
+    else
+    {
+        updateReactiveState();
+    }
 
     const auto out = static_cast<float>(nodeVoltage[static_cast<size_t>(outputIndex)] - outputOffset);
 
