@@ -874,6 +874,7 @@ void Circuit::prepare(double sampleRate)
     linearDirty = true;
     factorisationValid = false;
     nonConvergenceCount = 0;
+    heldInARow = 0;
 
     reset();
 
@@ -963,6 +964,7 @@ void Circuit::clearState() noexcept
     std::fill(portVoltage.begin(), portVoltage.end(), 0.0);
     lastIterationCount = 0;
     lastActiveRowCount = 0;
+    heldInARow = 0;
 }
 
 void Circuit::reset()

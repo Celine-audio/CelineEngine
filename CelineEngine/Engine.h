@@ -633,6 +633,19 @@ class Circuit
     static constexpr double minContinuationStride = 1.0 / 1048576.0; // 2^-20
     static constexpr int continuationBudget = 960;
 
+    /** How often a run of held samples tries continuation again. A sample
+        that fails straight after one that was held goes without it: the run
+        is a part of the circuit's travel the solver cannot follow (an op-amp
+        comparator's flip, which continuation cannot walk across either), and
+        spending the whole budget on every sample of it cost 3.9 s per second
+        of audio on one op-amp -- an overrun the host plays as break-up, where
+        holding costs a repeated sample. Every this-many held samples in a row
+        get the full attempt again, so a run that continuation could end is
+        ended within a millisecond at 48 kHz. A failure after a sample that
+        converged always gets it, so a sheet that never holds -- every one
+        continuation was built for -- renders exactly as before. */
+    static constexpr int heldRetryInterval = 32;
+
     /** Passes settleLimiters() may take. A plate's limiter moves 100 V a
         pass and a junction's a few tenths of a volt near its knee, so a
         handful is typical; this is a backstop. */
@@ -914,5 +927,6 @@ class Circuit
     bool operatingPointConverged = true;
     int lastIterationCount = 0;
     int nonConvergenceCount = 0;
+    int heldInARow = 0; // samples held since the last one that converged; see heldRetryInterval
     int reversedCapacitorCount = 0;
 };

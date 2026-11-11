@@ -1017,7 +1017,10 @@ bool Circuit::solveWithDk(double vIn) noexcept
     // The starting point's own vOpen is recomputed rather than remembered: the
     // DK equation v = vOpen - K i(v), read backwards, gives the vOpen the start
     // solves exactly, even if the sample before had itself given up.
-    if (! converged)
+    //
+    // Inside a run of held samples it is skipped except every
+    // heldRetryInterval-th: see there.
+    if (! converged && heldInARow % heldRetryInterval == 0)
     {
         const auto m = static_cast<size_t>(portCount);
 
@@ -1381,10 +1384,12 @@ float Circuit::process(float vIn)
     if (held)
     {
         ++nonConvergenceCount;
+        ++heldInARow;
         advanceSources();
     }
     else
     {
+        heldInARow = 0;
         updateReactiveState();
     }
 
